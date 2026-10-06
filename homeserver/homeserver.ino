@@ -35,6 +35,16 @@ const char* password = "1823LomeliPlascencia";
 /* --- Pines / IR --- */
 #define IR_SEND_PIN 3
 
+/* --- Robustez IR / WiFi ---
+ * El WiFi comparte la fuente con el LED IR; los picos de TX y el modem sleep
+ * pueden debilitar la trama. Repetimos la trama (idempotente por ser absoluta)
+ * y bajamos potencia/sleep de WiFi para reducir transitorios de corriente.
+ */
+#define WIFI_TX_POWER WIFI_POWER_8_5dBm
+#define IR_REPEAT 3
+#define IR_REPEAT_GAP_MS 50
+#define IR_SETTLE_MS 30
+
 /* ------------------------------------------------------------------
  * Estado del aire
  * ------------------------------------------------------------------ */
@@ -109,15 +119,19 @@ void setup() {
     }
 
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
     WiFi.begin(ssid, password);
     Serial.print(F("Conectando a WiFi"));
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
         Serial.print('.');
     }
+    WiFi.setTxPower(WIFI_TX_POWER);
     Serial.println();
     Serial.print(F("Conectado. IP: "));
     Serial.println(WiFi.localIP());
+    Serial.print(F("WiFi TX power reducido, sleep off. IR repeat x"));
+    Serial.println(IR_REPEAT);
 
     server.on("/api/sensors", HTTP_GET, handleSensors);
     server.on("/api/ac/status", HTTP_GET, handleAcStatus);
@@ -372,7 +386,15 @@ void transmitState() {
     ac.setSleep(lastState.sleep);
     ac.setHealth(lastState.health);
     ac.setButton(lastState.button);
-    ac.send();
+
+    /* Deja asentar el trafico WiFi del request antes de emitir. */
+    delay(IR_SETTLE_MS);
+    for (uint8_t i = 0; i < IR_REPEAT; i++) {
+        ac.send();
+        if (i + 1 < IR_REPEAT) {
+            delay(IR_REPEAT_GAP_MS);
+        }
+    }
 }
 
 /* ------------------------------------------------------------------
