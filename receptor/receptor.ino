@@ -1,41 +1,29 @@
 /*
- * ir_remote.ino - Control remoto infrarrojo (ESP32-C3 Super Mini)
+ * receptor.ino - Receptor/decodificador IR (ESP32-C3 Super Mini)
  *
- * Aire acondicionado York que usa el protocolo HAIER_AC_YRW02 (modelo A, 0xA6).
- * Decodifica el estado (power, temp, modo, fan, swing), reenvia tramas raw y
- * guarda tramas con nombre en NVS como respaldo para comandos no decodificados.
+ * Herramienta de aprendijaze: recibe IR, decodifica el aire York
+ * (HAIER_AC_YRW02) o protocolos estandar (NEC, etc.), muestra el estado en JSON
+ * y guarda tramas con nombre en NVS para que las use el transmisor.
  *
  * Hardware:
- *   Receptor IR (VS1838B / TSOP)  OUT -> GPIO1
- *   LED emisor IR (mejor con transistor NPN) -> GPIO3
- *   Alimentacion del receptor: 3.3V y GND (condensador de 100nF entre VCC y GND)
+ *   Receptor IR (VS1838B / TSOP) OUT -> GPIO1
+ *   (no usa emisor)
  *
- * GPIO8 (SDA) y GPIO9 (SCL) quedan libres para el sensor AHT10 de temperatura/humedad.
- * Se evita GPIO2 porque es pin de arranque (strapping).
- *
- * Libreria: IRremoteESP8266 de crankyoldgit (v2.8.x). NO convive con "IRremote".
+ * Libreria: IRremoteESP8266 de crankyoldgit. NO convive con "IRremote".
  *
  * Comandos por monitor Serie (115200):
- *   s                = reenviar el ultimo comando capturado
  *   r                = reimprimir el raw (microsegundos) del ultimo comando
- *   d                = volcar el array C (uint16_t, microsegundos) para sendRaw()
- *   status           = mostrar en JSON el ultimo estado decodificado del aire
+ *   d                = volcar el array C (uint16_t, microsegundos)
+ *   status           = mostrar en JSON el ultimo estado decodificado
  *   save <nombre>    = guardar el ultimo comando con ese nombre (NVS)
- *   send <nombre>    = enviar una trama guardada
  *   list             = listar las tramas guardadas
  *   del <nombre>     = borrar una trama guardada
- *   h                = mostrar la ayuda
- *
- * Nota: el IR es de una sola via. "status" refleja el ultimo comando capturado
- * o enviado, no una lectura real del equipo.
+ *   h                = ayuda
  */
 
 #include <Arduino.h>
 
-/* ------------------------------------------------------------------
- * Configuracion de la libreria (debe ir ANTES de #include <IRremoteESP8266.h>)
- * ------------------------------------------------------------------ */
-#define RAW_BUFFER_LENGTH 750      // buffer grande para tramas largas de aire acondicionado
+#define RAW_BUFFER_LENGTH 750
 
 #include <IRremoteESP8266.h>
 #include <IRrecv.h>
@@ -44,13 +32,12 @@
 #include <ir_Haier.h>
 #include <Preferences.h>
 
-#define IR_RECEIVE_PIN 1           // GPIO1 -> receptor IR
-#define IR_SEND_PIN 3              // GPIO3 -> LED emisor IR (no usar GPIO2)
-#define IR_FREQUENCY_KHZ 38
+#define IR_RECEIVE_PIN 1
+#define IR_SEND_PIN 3              // no se usa para emitir, solo para parsear el estado
 
-#define MAX_COMMANDS 10            // numero de tramas guardables
-#define MAX_NAME_LEN 16            // longitud maxima del nombre (incluye el 0 final)
-#define HAIER_STATE_LEN 14         // bytes del estado HAIER_AC_YRW02
+#define MAX_COMMANDS 10
+#define MAX_NAME_LEN 16
+#define HAIER_STATE_LEN 14
 
 /* ------------------------------------------------------------------
  * Estados por defecto (aire York, HAIER_AC_YRW02 modelo A).
@@ -87,7 +74,7 @@ static const NecDefault NEC_DEFAULTS[] = {
 static const uint8_t NEC_DEFAULTS_COUNT = sizeof(NEC_DEFAULTS) / sizeof(NEC_DEFAULTS[0]);
 
 /* ------------------------------------------------------------------
- * Estado del aire y almacen de comandos
+ * Estado y almacen de comandos
  * ------------------------------------------------------------------ */
 struct AcState {
     bool valid;
@@ -110,9 +97,9 @@ struct AcState {
 
 struct IRCommand {
     char name[MAX_NAME_LEN];
-    uint16_t data[RAW_BUFFER_LENGTH];   // microsegundos (formato sendRaw)
+    uint16_t data[RAW_BUFFER_LENGTH];
     uint16_t len;
-    uint8_t state[HAIER_STATE_LEN];     // estado decodificado (si aplica)
+    uint8_t state[HAIER_STATE_LEN];
     bool hasState;
     bool used;
 };
@@ -121,10 +108,9 @@ IRCommand commands[MAX_COMMANDS];
 Preferences prefs;
 
 IRrecv irrecv(IR_RECEIVE_PIN);
-IRsend irsend(IR_SEND_PIN);
 decode_results results;
 
-uint16_t lastRaw[RAW_BUFFER_LENGTH];    // ultimo comando en microsegundos
+uint16_t lastRaw[RAW_BUFFER_LENGTH];
 uint16_t lastRawLen = 0;
 uint8_t lastStateBytes[HAIER_STATE_LEN];
 bool lastHasState = false;
@@ -146,8 +132,6 @@ void dumpArray();
 void handleLine(char* line);
 void printHelp();
 void printStateJSON();
-void sendLastCode();
-void sendByName(const char* name);
 void saveCommand(const char* name);
 void deleteCommand(const char* name);
 void listCommands();
@@ -157,7 +141,6 @@ void preloadDefaults();
 void ensureDefaults();
 void installAcCommand(int slot, const char* name, const uint8_t* st);
 void installNecCommand(int slot, const char* name, uint8_t addr, uint8_t cmd);
-void sendNec(uint8_t addr, uint8_t cmd);
 uint16_t buildYrw02Raw(const uint8_t* st, uint16_t* out);
 uint16_t buildNecRaw(uint32_t data, uint16_t* out);
 int findCommand(const char* name);
@@ -171,37 +154,31 @@ void printQuotedLabel(const char* label, uint8_t raw);
 
 void setup() {
     Serial.begin(115200);
-    delay(2000); // espera a que el monitor Serie USB del C3 este listo
+    delay(2000);
 
     Serial.println();
     Serial.println(F("================================================"));
-    Serial.println(F(" Decodificador / Emisor IR - ESP32-C3 SuperMini"));
+    Serial.println(F(" Receptor IR / aprendizaje - ESP32-C3 SuperMini"));
     Serial.println(F("================================================"));
 
     irrecv.enableIRIn();
-    irsend.begin();
 
     prefs.begin("irremote", false);
     loadCommands();
     ensureDefaults();
 
     Serial.print(F("Receptor IR en GPIO"));
-    Serial.print(IR_RECEIVE_PIN);
-    Serial.print(F(" | Emisor IR en GPIO"));
-    Serial.println(IR_SEND_PIN);
-    Serial.println(F("Protocolo objetivo: HAIER_AC_YRW02 (aire York)"));
+    Serial.println(IR_RECEIVE_PIN);
     printHelp();
     listCommands();
 }
 
 void loop() {
-    /* --- Recepcion IR --- */
     if (irrecv.decode(&results)) {
         handleCapture();
         irrecv.resume();
     }
 
-    /* --- Comandos por monitor Serie (por linea) --- */
     while (Serial.available() > 0) {
         char c = Serial.read();
         if (c == '\n' || c == '\r') {
@@ -219,7 +196,6 @@ void loop() {
 void handleCapture() {
     hasCode = true;
 
-    /* --- Guardar raw (microsegundos) --- */
     uint16_t corrected = getCorrectedRawLength(&results);
     uint16_t* raw = resultToRawArray(&results);
     if (raw != NULL && corrected > 0 && corrected <= RAW_BUFFER_LENGTH) {
@@ -259,7 +235,7 @@ void handleCapture() {
         }
     }
 
-    Serial.println(F("s=reenviar, status=estado JSON, d=array C, save <nombre>=guardar."));
+    Serial.println(F("status=estado JSON, r=raw, d=array C, save <nombre>=guardar."));
 }
 
 void updateStateFromBytes(const uint8_t* st) {
@@ -333,9 +309,7 @@ void handleLine(char* line) {
         return;
     }
 
-    if (!strcmp(cmd, "s") || !strcmp(cmd, "S")) {
-        sendLastCode();
-    } else if (!strcmp(cmd, "r") || !strcmp(cmd, "R")) {
+    if (!strcmp(cmd, "r") || !strcmp(cmd, "R")) {
         printRawFormatted();
     } else if (!strcmp(cmd, "d") || !strcmp(cmd, "D")) {
         dumpArray();
@@ -345,71 +319,17 @@ void handleLine(char* line) {
         printHelp();
     } else if (!strcmp(cmd, "list")) {
         listCommands();
-    } else if (!strcmp(cmd, "send")) {
-        char* arg = strtok(NULL, " \t");
-        if (arg) sendByName(arg); else Serial.println(F("Uso: send <nombre>"));
     } else if (!strcmp(cmd, "save")) {
         char* arg = strtok(NULL, " \t");
         if (arg) saveCommand(arg); else Serial.println(F("Uso: save <nombre>"));
     } else if (!strcmp(cmd, "del")) {
         char* arg = strtok(NULL, " \t");
         if (arg) deleteCommand(arg); else Serial.println(F("Uso: del <nombre>"));
-    } else if (!strcmp(cmd, "nec")) {
-        char* a = strtok(NULL, " \t");
-        char* b = strtok(NULL, " \t");
-        if (a && b) {
-            sendNec((uint8_t)strtoul(a, NULL, 16), (uint8_t)strtoul(b, NULL, 16));
-        } else {
-            Serial.println(F("Uso: nec <addr_hex> <cmd_hex>   ej: nec 50 17"));
-        }
     } else {
         Serial.print(F("Comando no reconocido: "));
         Serial.println(cmd);
         printHelp();
     }
-}
-
-/* ------------------------------------------------------------------
- * Envio
- * ------------------------------------------------------------------ */
-void sendLastCode() {
-    if (!hasCode || lastRawLen == 0) {
-        Serial.println(F("No hay raw capturado para reenviar."));
-        return;
-    }
-    Serial.print(F("Enviando ultimo raw ("));
-    Serial.print(lastRawLen);
-    Serial.print(F(" entradas a "));
-    Serial.print(IR_FREQUENCY_KHZ);
-    Serial.println(F("kHz)..."));
-    irsend.sendRaw(lastRaw, lastRawLen, IR_FREQUENCY_KHZ);
-    if (lastHasState) {
-        updateStateFromBytes(lastStateBytes);
-    }
-    Serial.println(F("Enviado."));
-}
-
-void sendByName(const char* name) {
-    int idx = findCommand(name);
-    if (idx < 0) {
-        Serial.print(F("No existe la trama: "));
-        Serial.println(name);
-        return;
-    }
-    Serial.print(F("Enviando '"));
-    Serial.print(commands[idx].name);
-    Serial.print(F("' ("));
-    Serial.print(commands[idx].len);
-    Serial.print(F(" entradas a "));
-    Serial.print(IR_FREQUENCY_KHZ);
-    Serial.println(F("kHz)..."));
-    irsend.sendRaw(commands[idx].data, commands[idx].len, IR_FREQUENCY_KHZ);
-    if (commands[idx].hasState) {
-        memcpy(lastStateBytes, commands[idx].state, HAIER_STATE_LEN);
-        lastHasState = true;
-        updateStateFromBytes(lastStateBytes);
-    }
-    Serial.println(F("Enviado."));
 }
 
 /* ------------------------------------------------------------------
@@ -529,54 +449,31 @@ int firstFreeSlot() {
     return -1;
 }
 
-void sendNec(uint8_t addr, uint8_t cmd) {
-    /* NEC: addr, ~addr, cmd, ~cmd (LSB first). Ej: 0x50,0x17 -> 0xE817AF50. */
-    uint32_t data = ((uint32_t)(addr) & 0xFF)
-                  | (((uint32_t)(~addr) & 0xFF) << 8)
-                  | (((uint32_t)(cmd) & 0xFF) << 16)
-                  | (((uint32_t)(~cmd) & 0xFF) << 24);
-
-    lastRawLen = buildNecRaw(data, lastRaw);
-    hasCode = true;
-    lastHasState = false;
-    lastState.valid = false;
-
-    Serial.print(F("Enviando NEC addr=0x"));
-    Serial.print(addr, HEX);
-    Serial.print(F(" cmd=0x"));
-    Serial.print(cmd, HEX);
-    Serial.print(F(" (data=0x"));
-    Serial.print(data, HEX);
-    Serial.println(F(")..."));
-    irsend.sendRaw(lastRaw, lastRawLen, IR_FREQUENCY_KHZ);
-    Serial.println(F("Enviado. Usa 'd' para el array o 'save <nombre>' para guardarlo."));
+uint16_t buildYrw02Raw(const uint8_t* st, uint16_t* out) {
+    uint16_t i = 0;
+    out[i++] = 3000;
+    out[i++] = 3000;
+    out[i++] = 3000;
+    out[i++] = 4300;
+    for (uint8_t b = 0; b < HAIER_STATE_LEN; b++) {
+        for (int8_t bit = 7; bit >= 0; bit--) {
+            out[i++] = 550;
+            out[i++] = ((st[b] >> bit) & 1) ? 1650 : 550;
+        }
+    }
+    out[i++] = 550;
+    return i;
 }
 
 uint16_t buildNecRaw(uint32_t data, uint16_t* out) {
     uint16_t i = 0;
-    out[i++] = 9000;   // header mark
-    out[i++] = 4500;   // header space
+    out[i++] = 9000;
+    out[i++] = 4500;
     for (uint8_t b = 0; b < 32; b++) {
-        out[i++] = 560;                                  // bit mark
-        out[i++] = ((data >> b) & 1) ? 1690 : 560;       // one / zero space
+        out[i++] = 560;
+        out[i++] = ((data >> b) & 1) ? 1690 : 560;
     }
-    out[i++] = 560;    // final mark
-    return i;
-}
-
-uint16_t buildYrw02Raw(const uint8_t* st, uint16_t* out) {
-    uint16_t i = 0;
-    out[i++] = 3000;   // header mark
-    out[i++] = 3000;   // header space
-    out[i++] = 3000;   // header mark 2
-    out[i++] = 4300;   // header space 2
-    for (uint8_t b = 0; b < HAIER_STATE_LEN; b++) {
-        for (int8_t bit = 7; bit >= 0; bit--) {
-            out[i++] = 550;                                    // bit mark
-            out[i++] = ((st[b] >> bit) & 1) ? 1650 : 550;      // one / zero space
-        }
-    }
-    out[i++] = 550;    // final mark
+    out[i++] = 560;
     return i;
 }
 
@@ -643,7 +540,7 @@ void ensureDefaults() {
 }
 
 void persistCommands() {
-    size_t total = 1; // byte de conteo
+    size_t total = 1;
     for (int i = 0; i < MAX_COMMANDS; i++) {
         if (commands[i].used) {
             total += MAX_NAME_LEN + sizeof(uint16_t) + 1 + HAIER_STATE_LEN +
@@ -816,13 +713,10 @@ void deleteCommand(const char* name) {
 
 void printHelp() {
     Serial.println(F("Comandos:"));
-    Serial.println(F("  s                reenviar ultimo capturado"));
     Serial.println(F("  r                ver raw del ultimo"));
     Serial.println(F("  d                array C (uint16_t us) del ultimo"));
     Serial.println(F("  status           estado del aire en JSON"));
-    Serial.println(F("  nec <a> <c>      enviar NEC (hex) ej: nec 50 17"));
     Serial.println(F("  save <nombre>    guardar ultimo comando"));
-    Serial.println(F("  send <nombre>    enviar trama guardada"));
     Serial.println(F("  list             listar tramas guardadas"));
     Serial.println(F("  del <nombre>     borrar trama guardada"));
     Serial.println(F("  h                ayuda"));
