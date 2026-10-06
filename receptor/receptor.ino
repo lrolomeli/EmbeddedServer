@@ -457,11 +457,11 @@ uint16_t buildYrw02Raw(const uint8_t* st, uint16_t* out) {
     out[i++] = 4300;
     for (uint8_t b = 0; b < HAIER_STATE_LEN; b++) {
         for (int8_t bit = 7; bit >= 0; bit--) {
-            out[i++] = 550;
-            out[i++] = ((st[b] >> bit) & 1) ? 1650 : 550;
+            out[i++] = 520;
+            out[i++] = ((st[b] >> bit) & 1) ? 1650 : 650;
         }
     }
-    out[i++] = 550;
+    out[i++] = 520;
     return i;
 }
 

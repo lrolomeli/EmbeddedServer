@@ -248,16 +248,21 @@ void sendByName(const char* name) {
     }
     Serial.print(F("Enviando '"));
     Serial.print(commands[idx].name);
-    Serial.print(F("' ("));
-    Serial.print(commands[idx].len);
-    Serial.print(F(" entradas a "));
-    Serial.print(IR_FREQUENCY_KHZ);
-    Serial.println(F("kHz)..."));
-    irsend.sendRaw(commands[idx].data, commands[idx].len, IR_FREQUENCY_KHZ);
     if (commands[idx].hasState) {
+        Serial.println(F("' (protocolo HAIER_AC_YRW02)..."));
+        IRHaierACYRW02 ac(IR_SEND_PIN);
+        ac.setRaw(commands[idx].state);
+        ac.send();
         memcpy(lastStateBytes, commands[idx].state, HAIER_STATE_LEN);
         lastHasState = true;
         updateStateFromBytes(lastStateBytes);
+    } else {
+        Serial.print(F("' ("));
+        Serial.print(commands[idx].len);
+        Serial.print(F(" entradas a "));
+        Serial.print(IR_FREQUENCY_KHZ);
+        Serial.println(F("kHz)..."));
+        irsend.sendRaw(commands[idx].data, commands[idx].len, IR_FREQUENCY_KHZ);
     }
     Serial.println(F("Enviado."));
 }
@@ -409,11 +414,11 @@ uint16_t buildYrw02Raw(const uint8_t* st, uint16_t* out) {
     out[i++] = 4300;
     for (uint8_t b = 0; b < HAIER_STATE_LEN; b++) {
         for (int8_t bit = 7; bit >= 0; bit--) {
-            out[i++] = 550;
-            out[i++] = ((st[b] >> bit) & 1) ? 1650 : 550;
+            out[i++] = 520;
+            out[i++] = ((st[b] >> bit) & 1) ? 1650 : 650;
         }
     }
-    out[i++] = 550;
+    out[i++] = 520;
     return i;
 }
 

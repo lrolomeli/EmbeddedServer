@@ -353,16 +353,27 @@ void handleAcSet() {
     bool sleep  = lastState.valid ? lastState.sleep : false;
     bool health = lastState.valid ? lastState.health : false;
 
-    if (server.hasArg("power"))   power  = parseBoolArg(server.arg("power"));
-    if (server.hasArg("temp"))    temp   = (uint8_t)server.arg("temp").toInt();
-    if (server.hasArg("mode"))    mode   = parseModeArg(server.arg("mode"));
-    if (server.hasArg("fan"))     fan    = parseFanArg(server.arg("fan"));
-    if (server.hasArg("swing_v")) swingV = parseSwingVArg(server.arg("swing_v"));
-    if (server.hasArg("swing_h")) swingH = parseSwingHArg(server.arg("swing_h"));
-    if (server.hasArg("turbo"))   turbo  = parseBoolArg(server.arg("turbo"));
-    if (server.hasArg("quiet"))   quiet  = parseBoolArg(server.arg("quiet"));
-    if (server.hasArg("sleep"))   sleep  = parseBoolArg(server.arg("sleep"));
-    if (server.hasArg("health"))  health = parseBoolArg(server.arg("health"));
+    bool hasPower  = server.hasArg("power");
+    bool hasTemp   = server.hasArg("temp");
+    bool hasMode   = server.hasArg("mode");
+    bool hasFan    = server.hasArg("fan");
+    bool hasSwingV = server.hasArg("swing_v");
+    bool hasSwingH = server.hasArg("swing_h");
+    bool hasTurbo  = server.hasArg("turbo");
+    bool hasQuiet  = server.hasArg("quiet");
+    bool hasSleep  = server.hasArg("sleep");
+    bool hasHealth = server.hasArg("health");
+
+    if (hasPower)   power  = parseBoolArg(server.arg("power"));
+    if (hasTemp)    temp   = (uint8_t)server.arg("temp").toInt();
+    if (hasMode)    mode   = parseModeArg(server.arg("mode"));
+    if (hasFan)     fan    = parseFanArg(server.arg("fan"));
+    if (hasSwingV)  swingV = parseSwingVArg(server.arg("swing_v"));
+    if (hasSwingH)  swingH = parseSwingHArg(server.arg("swing_h"));
+    if (hasTurbo)   turbo  = parseBoolArg(server.arg("turbo"));
+    if (hasQuiet)   quiet  = parseBoolArg(server.arg("quiet"));
+    if (hasSleep)   sleep  = parseBoolArg(server.arg("sleep"));
+    if (hasHealth)  health = parseBoolArg(server.arg("health"));
 
     if (temp < 16) temp = 16;
     if (temp > 30) temp = 30;
@@ -378,9 +389,37 @@ void handleAcSet() {
     ac.setQuiet(quiet);
     ac.setSleep(sleep);
     ac.setHealth(health);
+
+    /* Los setters anteriores fijan el campo Button como efecto lateral; se
+       sobreescribe con el boton del parametro solicitado (como el test). */
+    uint8_t button = kHaierAcYrw02ButtonPower;
+    if (hasPower) {
+        button = kHaierAcYrw02ButtonPower;
+    } else if (hasMode) {
+        button = kHaierAcYrw02ButtonMode;
+    } else if (hasFan) {
+        button = kHaierAcYrw02ButtonFan;
+    } else if (hasTemp) {
+        button = (temp >= (lastState.valid ? lastState.tempC : temp))
+                     ? kHaierAcYrw02ButtonTempUp
+                     : kHaierAcYrw02ButtonTempDown;
+    } else if (hasSwingV) {
+        button = kHaierAcYrw02ButtonSwingV;
+    } else if (hasSwingH) {
+        button = kHaierAcYrw02ButtonSwingH;
+    } else if (hasTurbo || hasQuiet) {
+        button = kHaierAcYrw02ButtonTurbo;
+    } else if (hasSleep) {
+        button = kHaierAcYrw02ButtonSleep;
+    } else if (hasHealth) {
+        button = kHaierAcYrw02ButtonHealth;
+    }
+    ac.setButton(button);
     ac.send();
 
     lastState.valid = true;
+    lastState.button = button;
+
     lastState.power = power;
     lastState.tempC = temp;
     lastState.mode = mode;
@@ -474,14 +513,19 @@ bool sendByName(const char* name) {
     }
     Serial.print(F("Enviando '"));
     Serial.print(commands[idx].name);
-    Serial.print(F("' ("));
-    Serial.print(commands[idx].len);
-    Serial.println(F(" entradas)..."));
-    irsend.sendRaw(commands[idx].data, commands[idx].len, IR_FREQUENCY_KHZ);
     if (commands[idx].hasState) {
+        Serial.println(F("' (protocolo HAIER_AC_YRW02)..."));
+        IRHaierACYRW02 ac(IR_SEND_PIN);
+        ac.setRaw(commands[idx].state);
+        ac.send();
         memcpy(lastStateBytes, commands[idx].state, HAIER_STATE_LEN);
         lastHasState = true;
         updateStateFromBytes(lastStateBytes);
+    } else {
+        Serial.print(F("' ("));
+        Serial.print(commands[idx].len);
+        Serial.println(F(" entradas raw)..."));
+        irsend.sendRaw(commands[idx].data, commands[idx].len, IR_FREQUENCY_KHZ);
     }
     return true;
 }
@@ -675,11 +719,11 @@ uint16_t buildYrw02Raw(const uint8_t* st, uint16_t* out) {
     out[i++] = 4300;
     for (uint8_t b = 0; b < HAIER_STATE_LEN; b++) {
         for (int8_t bit = 7; bit >= 0; bit--) {
-            out[i++] = 550;
-            out[i++] = ((st[b] >> bit) & 1) ? 1650 : 550;
+            out[i++] = 520;
+            out[i++] = ((st[b] >> bit) & 1) ? 1650 : 650;
         }
     }
-    out[i++] = 550;
+    out[i++] = 520;
     return i;
 }
 
