@@ -19,6 +19,8 @@ Servidor HTTP en la red local que expone el sensor AHT10 y el envío de comandos
 | GET / POST | `/api/ac/send?name=<nombre>` | Envía una trama guardada |
 | GET / POST | `/api/ac/on` | Envía la trama `on` |
 | GET / POST | `/api/ac/off` | Envía la trama `off` |
+| GET / POST | `/api/ac/set` | Construye y envía un estado de aire absoluto (power/temp/mode/fan/...) |
+| GET / POST | `/api/ir/nec` | Envía una trama NEC arbitraria (`addr`/`cmd`) |
 
 > El IR es de **una sola vía**: `status` refleja el último comando que **tú** enviaste
 > (o capturaste), no una lectura del equipo.
@@ -159,6 +161,82 @@ Atajos que envían las tramas `on` / `off`.
 **Respuesta 200**
 ```json
 { "ok": true, "name": "on" }
+```
+
+---
+
+## GET/POST /api/ac/set
+
+Construye un estado `HAIER_AC_YRW02` con los parámetros recibidos y lo envía por IR.
+Los campos omitidos conservan el último estado conocido (o valores por defecto si aún
+no se envió ningún comando). La respuesta incluye el estado resultante.
+
+**Parámetros** (query string, o body `application/x-www-form-urlencoded`)
+
+| Nombre | Tipo | Valores | Notas |
+|---|---|---|---|
+| `power` | bool | `0/1`, `on/off`, `true/false` | |
+| `temp` | int | 16–30 | se recorta al rango |
+| `mode` | string/int | `auto`, `cool`, `dry`, `heat`, `fan` o raw | |
+| `fan` | string/int | `auto`, `high`, `med`, `low` o raw | |
+| `swing_v` | string/int | `off`, `top`, `middle`, `bottom`, `down`, `auto` o raw | |
+| `swing_h` | string/int | `middle`, `left_max`, `left`, `right`, `right_max`, `auto` o raw | |
+| `turbo` | bool | | |
+| `quiet` | bool | | |
+| `sleep` | bool | | |
+| `health` | bool | | |
+
+**Respuesta 200**
+```json
+{
+  "ok": true,
+  "state": {
+    "valid": true, "power": true, "temp": 24, "mode": "cool", "mode_raw": 1,
+    "fan": "med", "fan_raw": 2, "swing_v": "off", "swing_v_raw": 0,
+    "swing_h": "middle", "swing_h_raw": 0,
+    "turbo": false, "quiet": false, "sleep": false, "health": false
+  }
+}
+```
+
+**Ejemplos**
+```bash
+curl "http://$IP/api/ac/set?power=on&temp=24&mode=cool&fan=med"
+curl "http://$IP/api/ac/set?power=off"
+curl "http://$IP/api/ac/set?temp=26&swing_v=auto"
+```
+
+---
+
+## GET/POST /api/ir/nec
+
+Envía una trama NEC arbitraria sin necesidad de capturarla antes. Es la base para
+controles de TV u otros equipos NEC.
+
+**Parámetros**
+
+| Nombre | Ubicación | Requerido | Descripción |
+|---|---|---|---|
+| `addr` | query string o body form-urlencoded | sí | dirección NEC (`0x50` o `80`) |
+| `cmd` | query string o body form-urlencoded | sí | comando NEC (`0x17` o `23`) |
+
+Acepta hexadecimal con prefijo `0x` o decimal (parseo base 0). Nota: NEC invierte
+automáticamente los bytes de dirección/comando.
+
+**Respuesta 200**
+```json
+{ "ok": true, "addr": 80, "cmd": 23 }
+```
+
+**Respuesta 400** (faltan parámetros)
+```json
+{ "ok": false, "error": "faltan parametros addr y cmd" }
+```
+
+**Ejemplos**
+```bash
+curl "http://$IP/api/ir/nec?addr=0x50&cmd=0x17"
+curl "http://$IP/api/ir/nec?addr=80&cmd=23"
 ```
 
 ---

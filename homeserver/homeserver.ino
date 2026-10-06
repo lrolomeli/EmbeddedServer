@@ -17,6 +17,8 @@
  *   GET|POST /api/ac/send?name=X -> envia la trama guardada X
  *   GET|POST /api/ac/on          -> envia "on"
  *   GET|POST /api/ac/off         -> envia "off"
+ *   GET|POST /api/ac/set         -> construye y envia estado absoluto del aire
+ *   GET|POST /api/ir/nec?addr=&cmd= -> envia trama NEC arbitraria
  *
  * Comandos por monitor Serie (115200):
  *   send <nombre> / <nombre> (atajo) / nec <a> <c> / status / list / del <nombre> / h
@@ -160,8 +162,16 @@ void handleAcStatus();
 void handleAcSend();
 void handleAcOn();
 void handleAcOff();
+void handleAcSet();
+void handleIrNec();
 void handleIrList();
 void handleNotFound();
+
+uint8_t parseModeArg(const String& v);
+uint8_t parseFanArg(const String& v);
+uint8_t parseSwingVArg(const String& v);
+uint8_t parseSwingHArg(const String& v);
+bool parseBoolArg(const String& v);
 void handleLine(char* line);
 void printHelp();
 
@@ -207,6 +217,10 @@ void setup() {
     server.on("/api/ac/on", HTTP_POST, handleAcOn);
     server.on("/api/ac/off", HTTP_GET, handleAcOff);
     server.on("/api/ac/off", HTTP_POST, handleAcOff);
+    server.on("/api/ac/set", HTTP_GET, handleAcSet);
+    server.on("/api/ac/set", HTTP_POST, handleAcSet);
+    server.on("/api/ir/nec", HTTP_GET, handleIrNec);
+    server.on("/api/ir/nec", HTTP_POST, handleIrNec);
     server.onNotFound(handleNotFound);
 
     server.begin();
@@ -235,6 +249,47 @@ void loop() {
 /* ------------------------------------------------------------------
  * Handlers HTTP
  * ------------------------------------------------------------------ */
+uint8_t parseModeArg(const String& v) {
+    if (v == "auto") return 0;
+    if (v == "cool") return 1;
+    if (v == "dry")  return 2;
+    if (v == "heat") return 4;
+    if (v == "fan")  return 6;
+    return (uint8_t)v.toInt();
+}
+
+uint8_t parseFanArg(const String& v) {
+    if (v == "high") return 1;
+    if (v == "med")  return 2;
+    if (v == "low")  return 3;
+    if (v == "auto") return 5;
+    return (uint8_t)v.toInt();
+}
+
+uint8_t parseSwingVArg(const String& v) {
+    if (v == "off")    return 0;
+    if (v == "top")    return 1;
+    if (v == "middle") return 2;
+    if (v == "bottom") return 3;
+    if (v == "down")   return 0xA;
+    if (v == "auto")   return 0xC;
+    return (uint8_t)v.toInt();
+}
+
+uint8_t parseSwingHArg(const String& v) {
+    if (v == "middle")    return 0;
+    if (v == "left_max")  return 3;
+    if (v == "left")      return 4;
+    if (v == "right")     return 5;
+    if (v == "right_max") return 6;
+    if (v == "auto")      return 7;
+    return (uint8_t)v.toInt();
+}
+
+bool parseBoolArg(const String& v) {
+    return v == "1" || v == "on" || v == "true" || v == "yes";
+}
+
 void handleSensors() {
     if (!ahtOk) {
         server.send(503, "application/json",
@@ -284,6 +339,81 @@ void handleAcOn() {
 void handleAcOff() {
     sendByName("off");
     server.send(200, "application/json", F("{\"ok\":true,\"name\":\"off\"}"));
+}
+
+void handleAcSet() {
+    bool power  = lastState.valid ? lastState.power : false;
+    uint8_t temp   = lastState.valid ? lastState.tempC : 24;
+    uint8_t mode   = lastState.valid ? lastState.mode : 1;
+    uint8_t fan    = lastState.valid ? lastState.fan : 2;
+    uint8_t swingV = lastState.valid ? lastState.swingV : 0;
+    uint8_t swingH = lastState.valid ? lastState.swingH : 0;
+    bool turbo  = lastState.valid ? lastState.turbo : false;
+    bool quiet  = lastState.valid ? lastState.quiet : false;
+    bool sleep  = lastState.valid ? lastState.sleep : false;
+    bool health = lastState.valid ? lastState.health : false;
+
+    if (server.hasArg("power"))   power  = parseBoolArg(server.arg("power"));
+    if (server.hasArg("temp"))    temp   = (uint8_t)server.arg("temp").toInt();
+    if (server.hasArg("mode"))    mode   = parseModeArg(server.arg("mode"));
+    if (server.hasArg("fan"))     fan    = parseFanArg(server.arg("fan"));
+    if (server.hasArg("swing_v")) swingV = parseSwingVArg(server.arg("swing_v"));
+    if (server.hasArg("swing_h")) swingH = parseSwingHArg(server.arg("swing_h"));
+    if (server.hasArg("turbo"))   turbo  = parseBoolArg(server.arg("turbo"));
+    if (server.hasArg("quiet"))   quiet  = parseBoolArg(server.arg("quiet"));
+    if (server.hasArg("sleep"))   sleep  = parseBoolArg(server.arg("sleep"));
+    if (server.hasArg("health"))  health = parseBoolArg(server.arg("health"));
+
+    if (temp < 16) temp = 16;
+    if (temp > 30) temp = 30;
+
+    IRHaierACYRW02 ac(IR_SEND_PIN);
+    ac.setPower(power);
+    ac.setTemp(temp);
+    ac.setMode(mode);
+    ac.setFan(fan);
+    ac.setSwingV(swingV);
+    ac.setSwingH(swingH);
+    ac.setTurbo(turbo);
+    ac.setQuiet(quiet);
+    ac.setSleep(sleep);
+    ac.setHealth(health);
+    ac.send();
+
+    lastState.valid = true;
+    lastState.power = power;
+    lastState.tempC = temp;
+    lastState.mode = mode;
+    lastState.fan = fan;
+    lastState.swingV = swingV;
+    lastState.swingH = swingH;
+    lastState.turbo = turbo;
+    lastState.quiet = quiet;
+    lastState.sleep = sleep;
+    lastState.health = health;
+
+    String j = "{\"ok\":true,\"state\":";
+    j += stateToJSON();
+    j += "}";
+    server.send(200, "application/json", j);
+}
+
+void handleIrNec() {
+    if (!server.hasArg("addr") || !server.hasArg("cmd")) {
+        server.send(400, "application/json",
+                    F("{\"ok\":false,\"error\":\"faltan parametros addr y cmd\"}"));
+        return;
+    }
+    uint8_t addr = (uint8_t)strtoul(server.arg("addr").c_str(), NULL, 0);
+    uint8_t cmd  = (uint8_t)strtoul(server.arg("cmd").c_str(), NULL, 0);
+    sendNec(addr, cmd);
+
+    String j = "{\"ok\":true,\"addr\":";
+    j += addr;
+    j += ",\"cmd\":";
+    j += cmd;
+    j += "}";
+    server.send(200, "application/json", j);
 }
 
 void handleNotFound() {
