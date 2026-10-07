@@ -75,6 +75,10 @@ bool ahtOk = false;
 char lineBuf[64];
 uint8_t lineLen = 0;
 
+/* --- Debug WiFi --- */
+const unsigned long WIFI_REPORT_MS = 5000;
+unsigned long lastWifiReport = 0;
+
 /* ------------------------------------------------------------------
  * Prototipos
  * ------------------------------------------------------------------ */
@@ -99,6 +103,25 @@ String stateToJSON();
 
 void handleLine(char* line);
 void printHelp();
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info);
+
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+            Serial.println(F("[WiFi] asociado al AP"));
+            break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            Serial.print(F("[WiFi] IP obtenida: "));
+            Serial.println(WiFi.localIP());
+            break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            Serial.print(F("[WiFi] DESCONECTADO, reason="));
+            Serial.println(info.wifi_sta_disconnected.reason);
+            break;
+        default:
+            break;
+    }
+}
 
 void setup() {
     Serial.begin(115200);
@@ -121,6 +144,9 @@ void setup() {
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
     WiFi.setTxPower(WIFI_TX_POWER);
+    WiFi.onEvent(onWiFiEvent);
+    Serial.print(F("MAC: "));
+    Serial.println(WiFi.macAddress());
     WiFi.begin(ssid, password);
     Serial.print(F("Conectando a WiFi"));
     while (WiFi.status() != WL_CONNECTED) {
@@ -130,6 +156,15 @@ void setup() {
     Serial.println();
     Serial.print(F("Conectado. IP: "));
     Serial.println(WiFi.localIP());
+    Serial.print(F("Gateway: "));
+    Serial.print(WiFi.gatewayIP());
+    Serial.print(F("  Canal: "));
+    Serial.print(WiFi.channel());
+    Serial.print(F("  RSSI: "));
+    Serial.print(WiFi.RSSI());
+    Serial.println(F(" dBm"));
+    Serial.print(F("BSSID: "));
+    Serial.println(WiFi.BSSIDstr());
     Serial.print(F("WiFi TX power maximo, sleep off. IR repeat x"));
     Serial.println(IR_REPEAT);
 
@@ -146,6 +181,21 @@ void setup() {
 
 void loop() {
     server.handleClient();
+
+    if (millis() - lastWifiReport >= WIFI_REPORT_MS) {
+        lastWifiReport = millis();
+        Serial.print(F("[WiFi] status="));
+        Serial.print(WiFi.status());
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.print(F(" IP="));
+            Serial.print(WiFi.localIP());
+            Serial.print(F(" RSSI="));
+            Serial.print(WiFi.RSSI());
+            Serial.println(F(" dBm"));
+        } else {
+            Serial.println(F(" (NO conectado)"));
+        }
+    }
 
     while (Serial.available() > 0) {
         char c = Serial.read();
