@@ -38,9 +38,9 @@ const char* password = "1823LomeliPlascencia";
 /* --- Robustez IR / WiFi ---
  * El WiFi comparte la fuente con el LED IR; los picos de TX y el modem sleep
  * pueden debilitar la trama. Repetimos la trama (idempotente por ser absoluta)
- * y bajamos potencia/sleep de WiFi para reducir transitorios de corriente.
+ * y usamos maxima potencia de WiFi (sleep off) para un enlace mas estable.
  */
-#define WIFI_TX_POWER WIFI_POWER_8_5dBm
+#define WIFI_TX_POWER WIFI_POWER_19_5dBm
 #define IR_REPEAT 3
 #define IR_REPEAT_GAP_MS 50
 #define IR_SETTLE_MS 30
@@ -120,17 +120,17 @@ void setup() {
 
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
+    WiFi.setTxPower(WIFI_TX_POWER);
     WiFi.begin(ssid, password);
     Serial.print(F("Conectando a WiFi"));
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
         Serial.print('.');
     }
-    WiFi.setTxPower(WIFI_TX_POWER);
     Serial.println();
     Serial.print(F("Conectado. IP: "));
     Serial.println(WiFi.localIP());
-    Serial.print(F("WiFi TX power reducido, sleep off. IR repeat x"));
+    Serial.print(F("WiFi TX power maximo, sleep off. IR repeat x"));
     Serial.println(IR_REPEAT);
 
     server.on("/api/sensors", HTTP_GET, handleSensors);
